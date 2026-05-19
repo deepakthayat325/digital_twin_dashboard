@@ -1,177 +1,217 @@
-import streamlit as st
+import contextlib
+import io
+import sys
+from pathlib import Path
+
+
+def import_streamlit():
+    try:
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            import streamlit as st
+            from streamlit.runtime.scriptrunner import get_script_run_ctx
+        return st, get_script_run_ctx
+    except Exception:
+        return None, None
+
+
+st, get_script_run_ctx = import_streamlit()
+
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import sys
-import os
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
+sys.path.append(str(Path(__file__).resolve().parent))
 
 from src.predict import predict
+from src.optimize import optimize_machining_parameters
 
-st.set_page_config(page_title="CNC Milling Digital Twin Dashboard", layout="wide")
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / 'Data'
+MODEL_PATH = BASE_DIR / 'models' / 'tool_life_model.pkl'
 
-# Load data
-@st.cache_data
+
 def load_data():
-    processed_data = pd.read_csv(r'c:\Users\deepak thayat\Desktop\Project\Data\processed_data.csv')
-    raw_data = pd.read_csv(r'c:\Users\deepak thayat\Desktop\Project\Data\dataset_with_tool_life.csv')
+    processed_data = pd.read_csv(DATA_DIR / 'processed_data.csv')
+    raw_data = pd.read_csv(DATA_DIR / 'dataset_with_tool_life.csv')
     return processed_data, raw_data
 
-processed_data, raw_data = load_data()
 
-st.title("CNC Milling Machine Digital Twin Dashboard")
+def format_force(value):
+    return f"{abs(value):.2f} N"
 
-tab1, tab2, tab3, tab4 = st.tabs(["Tool Life Prediction", "Data Overview", "Force Analysis", "Model Insights"])
 
-model_path = r'c:\Users\deepak thayat\Desktop\Project\models\tool_life_model.pkl'
+def main():
+    st.set_page_config(page_title='CNC Milling Optimization Dashboard', layout='wide')
+    processed_data, raw_data = load_data()
 
-with tab1:
-    st.header("Tool Life and Force Prediction")
-    
-    col1, col2 = st.columns([1, 2])
-    
-    with col1:
-        st.subheader("Input Parameters")
-        rpm = st.slider("RPM", 1000, 5000, 1000, step=1000, help="Spindle speed in revolutions per minute")
-        feed = st.slider("Feed (mm/sec)", 1.0, 6.0, 2.0, help="Feed rate in mm per second")
-        doc = st.slider("Depth of Cut (mm)", 1.0, 5.0, 1.0, help="Depth of cut in mm")
-        
-        if st.button("Predict", type="primary"):
-            try:
-                result = predict(model_path, rpm, feed, doc)
-                
-                st.success("Prediction completed!")
-                
-                # Display results
-                st.subheader("Predicted Results")
-                
-                # Tool Life prominently displayed
-                st.markdown("### Tool Life Prediction")
+    st.title('CNC Milling Optimization Dashboard')
+    tab1, tab2, tab3, tab4 = st.tabs([
+        'Tool Life Prediction',
+        'Data Overview',
+        'Force Analysis',
+        'Model Insights'
+    ])
+
+    with tab1:
+        st.header('Tool Life and Optimization')
+        col1, col2 = st.columns([1, 2])
+
+        if 'prediction' not in st.session_state:
+            st.session_state.prediction = None
+        if 'optimization' not in st.session_state:
+            st.session_state.optimization = None
+
+        with col1:
+            st.subheader('Input Parameters')
+            rpm = st.slider('RPM', 1000, 5000, 1000, step=500)
+            feed = st.slider('Feed (mm/sec)', 2.0, 6.0, 2.0, step=0.25)
+            doc = st.slider('Depth of Cut (mm)', 1.0, 5.0, 1.0, step=0.25)
+
+            if st.button('Predict', type='primary'):
+                st.session_state.prediction = predict(str(MODEL_PATH), rpm, feed, doc)
+                st.success('Prediction completed!')
+
+            st.markdown('---')
+            st.subheader('Optimize Machining Parameters')
+            st.write('Search for the best RPM, Feed, and DOC combination to maximize tool life.')
+
+            if st.button('Optimize Parameters', key='optimize'):
+                st.session_state.optimization = optimize_machining_parameters(
+                    str(MODEL_PATH),
+                    rpm_min=1000,
+                    rpm_max=5000,
+                    feed_min=2.0,
+                    feed_max=6.0,
+                    doc_min=1.0,
+                    doc_max=5.0,
+                    rpm_step=250,
+                    feed_step=0.25,
+                    doc_step=0.25
+                )
+                st.success('Optimized parameters found!')
+
+        with col2:
+            st.subheader('Prediction & Optimization Results')
+            if st.session_state.prediction is not None:
+                result = st.session_state.prediction
                 tool_life = result['Tool_Life_HSS_min']
-                st.metric("Estimated Tool Life", f"{tool_life:.2f} minutes", 
-                         delta=f"{'Good' if tool_life > 30 else 'Monitor' if tool_life > 15 else 'Replace Soon'}",
-                         delta_color="normal")
-                
-                # Force metrics
-                st.markdown("### Maximum Cutting Forces")
-                force_values = [abs(result['Max_Force_X']), abs(result['Max_Force_Y']), abs(result['Max_Force_Z'])]
-                force_labels = ["X Direction (N)", "Y Direction (N)", "Z Direction (N)"]
-                force_cols = st.columns(3)
-                
-                for col, label, value in zip(force_cols, force_labels, force_values):
-                    with col:
-                        st.markdown(f"**{label}**")
-                        st.markdown(f"# {value:.2f}")
-                    
-            except Exception as e:
-                st.error(f"Error in prediction: {str(e)}")
-    
-    with col2:
-        st.subheader("Prediction Visualization")
-        if 'result' in locals():
-            # Tool Life Gauge
-            tool_life = result['Tool_Life_HSS_min']
-            fig_gauge = go.Figure(go.Indicator(
-                mode = "gauge+number",
-                value = tool_life,
-                title = {'text': "Tool Life (minutes)"},
-                gauge = {
-                    'axis': {'range': [0, 60]},
-                    'bar': {'color': "darkblue"},
-                    'steps': [
-                        {'range': [0, 15], 'color': "red"},
-                        {'range': [15, 30], 'color': "orange"},
-                        {'range': [30, 60], 'color': "green"}],
-                    'threshold': {
-                        'line': {'color': "black", 'width': 4},
-                        'thickness': 0.75,
-                        'value': tool_life}}))
-            st.plotly_chart(fig_gauge)
-            
-            # Forces Bar Chart with magnitude
-            forces = [abs(result['Max_Force_X']), abs(result['Max_Force_Y']), abs(result['Max_Force_Z'])]
-            force_colors = ['#5dade2', '#f4d03f', '#e74c3c']
-            fig_bar = go.Figure(data=go.Bar(
-                x=['X', 'Y', 'Z'],
-                y=forces,
-                marker_color=force_colors,
-                text=[f"{v:.1f} N" for v in forces],
-                textposition='auto'
-            ))
-            fig_bar.update_layout(
-                title="Predicted Maximum Force Magnitudes",
-                yaxis_title="Force Magnitude (N)",
-                xaxis_title="Direction",
-                template='plotly_white',
-                yaxis=dict(showgrid=True)
-            )
-            st.plotly_chart(fig_bar)
+                st.markdown('### Predicted Outputs')
 
-with tab2:
-    st.header("Data Overview")
-    
-    st.subheader("Processed Dataset Summary")
-    st.dataframe(processed_data.describe())
-    
-    st.subheader("Feature Correlations")
-    corr = processed_data[['RPM', 'Feed_mm_per_sec', 'DOC_mm', 'Tool_Life_HSS_min', 'Max_Force_X', 'Max_Force_Y', 'Max_Force_Z']].corr()
-    fig = px.imshow(corr, text_auto=True, title="Correlation Matrix")
-    st.plotly_chart(fig)
-    
-    st.subheader("Scatter Plots")
-    col1, col2 = st.columns(2)
-    with col1:
-        fig = px.scatter(processed_data, x='RPM', y='Tool_Life_HSS_min', title="RPM vs Tool Life")
+                gauge_fig = go.Figure(go.Indicator(
+                    mode='gauge+number',
+                    value=tool_life,
+                    title={'text': 'Tool Life (minutes)'},
+                    number={'suffix': ' min', 'font': {'size': 42}},
+                    gauge={
+                        'axis': {'range': [0, 60], 'tickwidth': 1, 'tickcolor': 'darkgray'},
+                        'bar': {'color': '#192a56'},
+                        'steps': [
+                            {'range': [0, 15], 'color': '#e74c3c'},
+                            {'range': [15, 30], 'color': '#f39c12'},
+                            {'range': [30, 60], 'color': '#27ae60'}
+                        ],
+                        'threshold': {
+                            'line': {'color': 'black', 'width': 4},
+                            'thickness': 0.75,
+                            'value': tool_life
+                        }
+                    }
+                ))
+                gauge_fig.update_layout(margin={'t': 30, 'b': 0, 'l': 0, 'r': 0}, height=360)
+                st.plotly_chart(gauge_fig)
+
+                forces = [result['Max_Force_X'], result['Max_Force_Y'], result['Max_Force_Z']]
+                fig_bar = go.Figure(data=go.Bar(
+                    x=['X', 'Y', 'Z'],
+                    y=[abs(v) for v in forces],
+                    marker_color=['#1f77b4', '#ff7f0e', '#2ca02c'],
+                    text=[format_force(v) for v in forces],
+                    textposition='auto'
+                ))
+                fig_bar.update_layout(title='Predicted Maximum Forces', yaxis_title='Force (N)')
+                st.plotly_chart(fig_bar)
+
+                resultant = (result['Max_Force_X'] ** 2 + result['Max_Force_Y'] ** 2 + result['Max_Force_Z'] ** 2) ** 0.5
+                st.metric('Predicted Resultant Force', f'{resultant:.2f} N')
+
+            if st.session_state.optimization is not None:
+                opt_result = st.session_state.optimization
+                st.markdown('---')
+                st.subheader('Optimized Settings')
+                cols = st.columns(3)
+                cols[0].metric('RPM', opt_result['RPM'])
+                cols[1].metric('Feed', f"{opt_result['Feed_mm_per_sec']:.2f} mm/sec")
+                cols[2].metric('DOC', f"{opt_result['DOC_mm']:.2f} mm")
+
+                st.metric('Optimized Tool Life', f"{opt_result['Tool_Life_HSS_min']:.2f} minutes")
+                st.metric('Optimized Resultant Force', f"{opt_result['Predicted_Resultant_Force']:.2f} N")
+
+                fig_opt = go.Figure(data=go.Bar(
+                    x=['X', 'Y', 'Z'],
+                    y=[abs(opt_result['Max_Force_X']), abs(opt_result['Max_Force_Y']), abs(opt_result['Max_Force_Z'])],
+                    marker_color=['#636efa', '#ef553b', '#00cc96'],
+                    text=[format_force(opt_result['Max_Force_X']), format_force(opt_result['Max_Force_Y']), format_force(opt_result['Max_Force_Z'])],
+                    textposition='auto'
+                ))
+                fig_opt.update_layout(title='Optimized Force Prediction', yaxis_title='Force (N)')
+                st.plotly_chart(fig_opt)
+
+    with tab2:
+        st.header('Data Overview')
+        st.subheader('Processed Dataset')
+        st.dataframe(processed_data)
+
+        st.subheader('Feature Correlations')
+        corr_columns = ['RPM', 'Feed_mm_per_sec', 'DOC_mm', 'Tool_Life_HSS_min', 'Max_Force_X', 'Max_Force_Y', 'Max_Force_Z', 'Resultant_Force']
+        corr = processed_data[corr_columns].corr()
+        fig_corr = px.imshow(corr, text_auto=True, title='Correlation Matrix')
+        st.plotly_chart(fig_corr)
+
+        st.subheader('Resultant Force Comparison')
+        fig_resultant = px.scatter(
+            processed_data,
+            x='sequence_id',
+            y=['Max_Force_X', 'Max_Force_Y', 'Max_Force_Z', 'Resultant_Force'],
+            title='Sequence Forces vs Resultant Force',
+            labels={'value': 'Force (N)', 'sequence_id': 'Sequence ID'},
+            template='plotly_white'
+        )
+        fig_resultant.update_layout(legend_title='Force Type')
+        st.plotly_chart(fig_resultant)
+
+    with tab3:
+        st.header('Force Analysis')
+        sequence = st.selectbox('Select Milling Sequence', processed_data['sequence_id'].unique())
+        seq_data = raw_data[raw_data['sequence_id'] == sequence]
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=seq_data['Time [s]'], y=seq_data['Force Reaction (X) [N]'], mode='lines', name='Force X'))
+        fig.add_trace(go.Scatter(x=seq_data['Time [s]'], y=seq_data['Force Reaction (Y) [N]'], mode='lines', name='Force Y'))
+        fig.add_trace(go.Scatter(x=seq_data['Time [s]'], y=seq_data['Force Reaction (Z) [N]'], mode='lines', name='Force Z'))
+        fig.update_layout(title=f'Force Reactions Over Time - Sequence {sequence}', xaxis_title='Time (s)', yaxis_title='Force (N)')
         st.plotly_chart(fig)
-    with col2:
-        fig = px.scatter(processed_data, x='DOC_mm', y='Max_Force_X', title="DOC vs Max Force X")
-        st.plotly_chart(fig)
 
-with tab3:
-    st.header("Force Analysis")
-    
-    sequence = st.selectbox("Select Milling Sequence", processed_data['sequence_id'].unique())
-    
-    seq_data = raw_data[raw_data['sequence_id'] == sequence]
-    
-    st.subheader(f"Force Profiles for Sequence {sequence}")
-    
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=seq_data['Time [s]'], y=seq_data['Force Reaction (X) [N]'], mode='lines', name='Force X'))
-    fig.add_trace(go.Scatter(x=seq_data['Time [s]'], y=seq_data['Force Reaction (Y) [N]'], mode='lines', name='Force Y'))
-    fig.add_trace(go.Scatter(x=seq_data['Time [s]'], y=seq_data['Force Reaction (Z) [N]'], mode='lines', name='Force Z'))
-    fig.update_layout(title=f"Force Reactions Over Time - Sequence {sequence}", xaxis_title="Time (s)", yaxis_title="Force (N)")
-    st.plotly_chart(fig)
-    
-    st.subheader("Sequence Parameters")
-    params = processed_data[processed_data['sequence_id'] == sequence][['RPM', 'Feed_mm_per_sec', 'DOC_mm', 'Tool_Life_HSS_min']].iloc[0]
-    st.write(f"RPM: {params['RPM']}, Feed: {params['Feed_mm_per_sec']} mm/sec, DOC: {params['DOC_mm']} mm, Tool Life: {params['Tool_Life_HSS_min']:.2f} min")
+        params = processed_data[processed_data['sequence_id'] == sequence][['RPM', 'Feed_mm_per_sec', 'DOC_mm', 'Tool_Life_HSS_min', 'Resultant_Force']].iloc[0]
+        st.write(f"RPM: {params['RPM']}, Feed: {params['Feed_mm_per_sec']} mm/sec, DOC: {params['DOC_mm']} mm, Tool Life: {params['Tool_Life_HSS_min']:.2f} min")
+        st.write(f"Resultant Force: {params['Resultant_Force']:.2f} N")
 
-with tab4:
-    st.header("Model Insights")
-    
-    st.subheader("Model Performance Metrics")
-    metrics = {
-        'Target': ['Tool Life', 'Max Force X', 'Max Force Y', 'Max Force Z'],
-        'R² Score': [0.997, 0.784, 0.747, 0.565]  # Updated if better
-    }
-    metrics_df = pd.DataFrame(metrics)
-    st.dataframe(metrics_df)
-    
-    fig = px.bar(metrics_df, x='Target', y='R² Score', title="Model R² Scores by Target", color='R² Score', color_continuous_scale='viridis')
-    st.plotly_chart(fig)
-    
-    st.subheader("Model Details")
-    st.write("**Best Model:** Gradient Boosting Regressor (Hyperparameter Tuned)")
-    st.write("**Tuned Parameters:** n_estimators=200, learning_rate=0.1, max_depth=5, min_samples_split=5, min_samples_leaf=2, subsample=0.9")
-    st.write("**Features:** RPM, Feed (mm/sec), Depth of Cut (mm)")
-    st.write("**Targets:** Tool Life (min), Max Forces X/Y/Z (N)")
-    st.write("**Training Data:** 27 milling sequences")
-    st.write("**Note:** Model performance optimized through hyperparameter tuning. Force predictions for Z-direction have lower accuracy due to limited training data.")
+    with tab4:
+        st.header('Model Insights')
+        metrics = {
+            'Target': ['Tool Life', 'Max Force X', 'Max Force Y', 'Max Force Z'],
+            'R² Score': [0.997, 0.784, 0.747, 0.565]
+        }
+        metrics_df = pd.DataFrame(metrics)
+        st.dataframe(metrics_df)
+        fig_metrics = px.bar(metrics_df, x='Target', y='R² Score', title='Model R² Scores by Target', color='R² Score')
+        st.plotly_chart(fig_metrics)
+        st.write('**Note:** Use `streamlit run app.py` to start this dashboard. Running with `python app.py` may show bare-mode warnings.')
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("**Digital Twin Features:**")
-st.sidebar.markdown("- Predictive tool life estimation")
-st.sidebar.markdown("- Force monitoring and analysis") 
-st.sidebar.markdown("- Data-driven insights")
-st.sidebar.markdown("- Interactive visualizations")
+
+if __name__ == '__main__':
+    if get_script_run_ctx() is None:
+        print('Please launch this app with Streamlit:')
+        print('    streamlit run app.py')
+    else:
+        main()
