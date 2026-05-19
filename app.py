@@ -31,8 +31,8 @@ def load_data():
         processed_data["Resultant_Force"]=(
 
             processed_data["Max_Force_X"]**2
-            +processed_data["Max_Force_Y"]**2
-            +processed_data["Max_Force_Z"]**2
+            + processed_data["Max_Force_Y"]**2
+            + processed_data["Max_Force_Z"]**2
 
         )**0.5
 
@@ -43,7 +43,7 @@ def format_force(v):
     return f"{abs(v):.2f} N"
 
 
-# ================= MAIN =================
+# ================= MAIN APP =================
 
 def main():
 
@@ -67,10 +67,9 @@ def main():
 
     ])
 
-
-# ==================================================
-# TAB 1
-# ==================================================
+# ===================================================
+# TAB1
+# ===================================================
 
     with tab1:
 
@@ -78,253 +77,267 @@ def main():
             "Tool Life and Optimization"
         )
 
+        col1,col2=st.columns([1,2])
+
         if "prediction" not in st.session_state:
             st.session_state.prediction=None
 
         if "optimization" not in st.session_state:
             st.session_state.optimization=None
 
-        left,right=st.columns([1.3,1])
 
-# ================= LEFT PANEL =================
+# ================= INPUT =================
 
-        with left:
+        with col1:
 
-            input_col,results_col=st.columns([1,1.5])
+            st.subheader(
+                "Input Parameters"
+            )
 
-            with input_col:
+            rpm=st.slider(
+                "RPM",
+                1000,
+                5000,
+                3500,
+                step=250
+            )
 
-                st.subheader(
-                    "Input Parameters"
+            feed=st.slider(
+                "Feed (mm/sec)",
+                2.0,
+                6.0,
+                5.0,
+                step=0.25
+            )
+
+            doc=st.slider(
+                "Depth of Cut (mm)",
+                1.0,
+                5.0,
+                4.0,
+                step=0.25
+            )
+
+
+            if st.button(
+                "Predict",
+                type="primary"
+            ):
+
+                st.session_state.prediction=(
+
+                    predict(
+                        MODEL_PATH,
+                        rpm,
+                        feed,
+                        doc
+                    )
+
                 )
 
-                rpm=st.slider(
-                    "RPM",
-                    1000,
-                    5000,
-                    3500,
-                    step=250
+                st.success(
+                    "Prediction completed"
                 )
 
-                feed=st.slider(
-                    "Feed (mm/sec)",
-                    2.0,
-                    6.0,
-                    5.0,
-                    step=0.25
+
+            st.markdown("---")
+
+            st.subheader(
+                "Optimization"
+            )
+
+            if st.button(
+                "Optimize Parameters"
+            ):
+
+                st.session_state.optimization=(
+
+                    optimize_machining_parameters(
+
+                        str(MODEL_PATH),
+
+                        rpm_min=1000,
+                        rpm_max=5000,
+
+                        feed_min=2,
+                        feed_max=6,
+
+                        doc_min=1,
+                        doc_max=5,
+
+                        rpm_step=250,
+                        feed_step=0.25,
+                        doc_step=0.25
+
+                    )
+
                 )
 
-                doc=st.slider(
-                    "Depth of Cut (mm)",
-                    1.0,
-                    5.0,
-                    4.0,
-                    step=0.25
+                st.success(
+                    "Optimization completed"
                 )
 
-                if st.button(
-                    "Predict",
-                    type="primary"
-                ):
 
-                    st.session_state.prediction=(
+# ================= RESULTS =================
 
-                        predict(
-                            MODEL_PATH,
-                            rpm,
-                            feed,
-                            doc
+        with col2:
+
+            st.subheader(
+                "Prediction Results"
+            )
+
+            if st.session_state.prediction:
+
+                result=st.session_state.prediction
+
+                tool_life=result[
+                    "Tool_Life_HSS_min"
+                ]
+
+# ================= TOOL LIFE GAUGE =================
+
+                gauge=go.Figure(
+
+                    go.Indicator(
+
+                        mode="gauge+number",
+
+                        value=tool_life,
+
+                        number={
+
+                            "suffix":" min",
+                            "font":{"size":50}
+
+                        },
+
+                        gauge={
+
+                            "axis":{
+                                "range":[0,60]
+                            },
+
+                            "bar":{
+                                "color":"#001f5b"
+                            },
+
+                            "steps":[
+
+                                {
+                                    "range":[0,10],
+                                    "color":"#ff3131"
+                                },
+
+                                {
+                                    "range":[10,20],
+                                    "color":"#ff6600"
+                                },
+
+                                {
+                                    "range":[20,30],
+                                    "color":"#ffcc00"
+                                },
+
+                                {
+                                    "range":[30,60],
+                                    "color":"#1db954"
+                                }
+
+                            ]
+
+                        }
+
+                    )
+
+                )
+
+                gauge.update_layout(
+                    height=300
+                )
+
+                st.plotly_chart(
+                    gauge,
+                    use_container_width=True
+                )
+
+# ================= FORCE BAR =================
+
+                forces=[
+
+                    result["Max_Force_X"],
+                    result["Max_Force_Y"],
+                    result["Max_Force_Z"]
+
+                ]
+
+                fig=go.Figure(
+
+                    data=[
+
+                        go.Bar(
+
+                            x=["X","Y","Z"],
+
+                            y=forces,
+
+                            text=[
+                                f"{x:.2f} N"
+                                for x in forces
+                            ],
+
+                            textposition="outside",
+
+                            marker_color=[
+
+                                "#3399ff",
+                                "#ff7b00",
+                                "#1ea83c"
+
+                            ]
+
                         )
 
-                    )
+                    ]
 
-                    st.success(
-                        "Prediction completed"
-                    )
+                )
+
+                fig.update_layout(
+
+                    title="Predicted Maximum Forces",
+                    yaxis_title="Force (N)"
+
+                )
+
+                st.plotly_chart(
+                    fig,
+                    use_container_width=True
+                )
+
+                resultant=(
+
+                    result["Max_Force_X"]**2
+                    + result["Max_Force_Y"]**2
+                    + result["Max_Force_Z"]**2
+
+                )**0.5
+
+                st.metric(
+
+                    "Predicted Resultant Force",
+                    f"{resultant:.2f} N"
+
+                )
+
+
+# ================= OPTIMIZATION =================
+
+            if st.session_state.optimization:
 
                 st.markdown("---")
 
                 st.subheader(
-                    "Optimize Machining Parameters"
+                    "Optimized Settings"
                 )
-
-                st.write(
-                    "Search for best RPM, Feed and DOC"
-                )
-
-                if st.button(
-                    "Optimize Parameters"
-                ):
-
-                    st.session_state.optimization=(
-
-                        optimize_machining_parameters(
-
-                            str(MODEL_PATH),
-
-                            rpm_min=1000,
-                            rpm_max=5000,
-
-                            feed_min=2,
-                            feed_max=6,
-
-                            doc_min=1,
-                            doc_max=5,
-
-                            rpm_step=250,
-                            feed_step=0.25,
-                            doc_step=0.25
-
-                        )
-
-                    )
-
-            with results_col:
-
-                st.subheader(
-                    "Prediction Results"
-                )
-
-                if st.session_state.prediction:
-
-                    result=st.session_state.prediction
-
-                    tool_life=result[
-                        "Tool_Life_HSS_min"
-                    ]
-
-                    gauge=go.Figure(
-
-                        go.Indicator(
-
-                            mode="gauge+number",
-
-                            value=tool_life,
-
-                            number={
-                                "suffix":" min"
-                            },
-
-                            gauge={
-
-                                "axis":{
-                                    "range":[0,60]
-                                },
-
-                                "bar":{
-                                    "color":"darkblue"
-                                },
-
-                                "steps":[
-
-                                    {
-                                        "range":[0,15],
-                                        "color":"red"
-                                    },
-
-                                    {
-                                        "range":[15,30],
-                                        "color":"orange"
-                                    },
-
-                                    {
-                                        "range":[30,60],
-                                        "color":"green"
-                                    }
-
-                                ]
-
-                            }
-
-                        )
-
-                    )
-
-                    gauge.update_layout(
-                        height=250
-                    )
-
-                    st.plotly_chart(
-                        gauge,
-                        use_container_width=True
-                    )
-
-                    forces=[
-
-                        result["Max_Force_X"],
-                        result["Max_Force_Y"],
-                        result["Max_Force_Z"]
-
-                    ]
-
-                    fig=go.Figure(
-
-                        data=[
-
-                            go.Bar(
-
-                                x=["X","Y","Z"],
-
-                                y=forces,
-
-                                text=[
-                                    format_force(x)
-                                    for x in forces
-                                ],
-
-                                textposition="outside",
-
-                                marker_color=[
-
-                                    "#3b82f6",
-                                    "#f97316",
-                                    "#16a34a"
-
-                                ]
-
-                            )
-
-                        ]
-
-                    )
-
-                    fig.update_layout(
-
-                        title="Predicted Maximum Forces",
-                        height=300
-
-                    )
-
-                    st.plotly_chart(
-                        fig,
-                        use_container_width=True
-                    )
-
-                    resultant=(
-
-                        result["Max_Force_X"]**2
-                        +result["Max_Force_Y"]**2
-                        +result["Max_Force_Z"]**2
-
-                    )**0.5
-
-                    st.metric(
-
-                        "Predicted Resultant Force",
-                        f"{resultant:.2f} N"
-
-                    )
-
-
-# ================= RIGHT PANEL =================
-
-        with right:
-
-            st.subheader(
-                "Optimized Settings"
-            )
-
-            if st.session_state.optimization:
 
                 opt=st.session_state.optimization
 
@@ -348,14 +361,24 @@ def main():
                 st.metric(
 
                     "Optimized Tool Life",
-                    f"{opt['Tool_Life_HSS_min']:.2f} minutes"
+                    f"{opt['Tool_Life_HSS_min']:.2f} min"
 
                 )
+
+
+                optimized_force=(
+
+                    opt["Max_Force_X"]**2
+                    + opt["Max_Force_Y"]**2
+                    + opt["Max_Force_Z"]**2
+
+                )**0.5
+
 
                 st.metric(
 
                     "Optimized Resultant Force",
-                    f"{opt['Predicted_Resultant_Force']:.2f} N"
+                    f"{optimized_force:.2f} N"
 
                 )
 
@@ -379,9 +402,9 @@ def main():
 
                             marker_color=[
 
-                                "#2563eb",
-                                "#ef4444",
-                                "#22c55e"
+                                "#2d5bff",
+                                "#ff2222",
+                                "#22bb55"
 
                             ]
 
@@ -394,7 +417,7 @@ def main():
                 fig2.update_layout(
 
                     title="Optimized Force Prediction",
-                    height=350
+                    yaxis_title="Force (N)"
 
                 )
 
@@ -403,9 +426,9 @@ def main():
                     use_container_width=True
                 )
 
-# ==================================================
+# ===================================================
 # TAB2
-# ==================================================
+# ===================================================
 
     with tab2:
 
@@ -413,16 +436,16 @@ def main():
             processed_data
         )
 
-# ==================================================
+
+# ===================================================
 # TAB3
-# ==================================================
+# ===================================================
 
     with tab3:
 
         sequence=st.selectbox(
 
             "Select Sequence",
-
             processed_data[
                 "sequence_id"
             ].unique()
@@ -436,39 +459,27 @@ def main():
         fig=go.Figure()
 
         fig.add_trace(
-
             go.Scatter(
-
                 x=seq["Time [s]"],
                 y=seq["Force Reaction (X) [N]"],
                 name="Force X"
-
             )
-
         )
 
         fig.add_trace(
-
             go.Scatter(
-
                 x=seq["Time [s]"],
                 y=seq["Force Reaction (Y) [N]"],
                 name="Force Y"
-
             )
-
         )
 
         fig.add_trace(
-
             go.Scatter(
-
                 x=seq["Time [s]"],
                 y=seq["Force Reaction (Z) [N]"],
                 name="Force Z"
-
             )
-
         )
 
         st.plotly_chart(
@@ -476,9 +487,10 @@ def main():
             use_container_width=True
         )
 
-# ==================================================
+
+# ===================================================
 # TAB4
-# ==================================================
+# ===================================================
 
     with tab4:
 
