@@ -19,12 +19,11 @@ def predict_with_model(model, rpm, feed, doc):
     }
 
 
-def optimization_score(prediction):
+def optimization_score(prediction, force_weight=0.05):
     tool_life = prediction['Tool_Life_HSS_min']
     forces = np.abs([prediction['Max_Force_X'], prediction['Max_Force_Y'], prediction['Max_Force_Z']])
     avg_force = np.mean(forces)
-    # Focus primarily on tool life; use a very small force penalty only to break ties.
-    return tool_life - 0.01 * avg_force
+    return tool_life - force_weight * avg_force
 
 
 def optimize_machining_parameters(
@@ -37,7 +36,8 @@ def optimize_machining_parameters(
     doc_max=5.0,
     rpm_step=250,
     feed_step=0.25,
-    doc_step=0.25
+    doc_step=0.25,
+    force_weight=0.05
 ):
     model = load_model(model_path)
 
@@ -45,35 +45,42 @@ def optimize_machining_parameters(
     feed_values = np.arange(feed_min, feed_max + feed_step / 2, feed_step)
     doc_values = np.arange(doc_min, doc_max + doc_step / 2, doc_step)
 
-    best_score = -np.inf
-    best_result = None
+    # Vectorize the grid search for speed
+    rpm_grid, feed_grid, doc_grid = np.meshgrid(rpm_values, feed_values, doc_values, indexing='ij')
+    combinations = np.vstack([
+        rpm_grid.ravel(),
+        feed_grid.ravel(),
+        doc_grid.ravel()
+    ]).T
 
-    for rpm in rpm_values:
-        for feed in feed_values:
-            for doc in doc_values:
-                prediction = predict_with_model(model, rpm, round(float(feed), 3), round(float(doc), 3))
-                score = optimization_score(prediction)
-                if score > best_score:
-                    best_score = score
-                    best_result = {
-                        'RPM': int(rpm),
-                        'Feed_mm_per_sec': float(round(feed, 3)),
-                        'DOC_mm': float(round(doc, 3)),
-                        **prediction,
-                        'Objective_Score': float(round(score, 4))
-                    }
+    input_data = pd.DataFrame(combinations, columns=['RPM', 'Feed_mm_per_sec', 'DOC_mm'])
+    predictions = model.predict(input_data)
 
-    if best_result is not None:
-        best_result['Predicted_Resultant_Force'] = float(np.sqrt(
-            best_result['Max_Force_X'] ** 2 +
-            best_result['Max_Force_Y'] ** 2 +
-            best_result['Max_Force_Z'] ** 2
-        ))
+    tool_life = predictions[:, 0]
+    forces = np.abs(predictions[:, 1:4])
+    avg_force = np.mean(forces, axis=1)
+    scores = tool_life - force_weight * avg_force
 
-    return best_result
+    best_idx = int(np.argmax(scores))
+    best_rpm, best_feed, best_doc = combinations[best_idx]
+    best_pred = predictions[best_idx]
+    best_score = float(scores[best_idx])
+
+    return {
+        'RPM': int(best_rpm),
+        'Feed_mm_per_sec': float(round(best_feed, 3)),
+        'DOC_mm': float(round(best_doc, 3)),
+        'Tool_Life_HSS_min': float(best_pred[0]),
+        'Max_Force_X': float(best_pred[1]),
+        'Max_Force_Y': float(best_pred[2]),
+        'Max_Force_Z': float(best_pred[3]),
+        'Objective_Score': float(round(best_score, 4))
+    }
 
 
 if __name__ == '__main__':
     base_dir = Path(__file__).resolve().parents[1]
     model_path = base_dir / 'models' / 'tool_life_model.pkl'
-    print(optimize_machining_parameters(str(model_path)))
+    optimized = optimize_machining_parameters(model_path)
+    print('Optimized parameters:')
+    print(optimized)
